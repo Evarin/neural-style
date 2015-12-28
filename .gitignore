@@ -1,6 +1,9 @@
 *.swp
 out*.png
 *.png
+*.jpg
+*.prototxt*
+*.caffemodel
 *.data
 models/
 !models/download_models.sh
