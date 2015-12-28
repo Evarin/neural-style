@@ -142,26 +142,12 @@ local function main(params)
    -- Unsupervised learning of the features
    local style_outputs = {}
    for i=1, #style_descrs do
-      local sz = outputs[i][1]:size()[1]
-      local toextract = torch.Tensor((sz*(sz+1))/2)
-      local ik = 1
-      for j=1, sz do
-	 for k=1, j do
-	    toextract[ik] = (j-1)*sz + k
-	    ik = ik+1
-	 end
-      end
-      local st = torch.Tensor(#outputs[i], toextract:nElement())
-      for j=1, #outputs[i] do
-	 local o = outputs[i][j]:storage()
-	 for k=1, toextract:nElement() do
-	    st[j][k] = o[toextract[k]]
-	 end
-      end
+      local st, sz = linearize_gram(outputs[i])
       print('PCA '..i..': layer '..style_layers[i])
       local ce, cv = pcacov(st)
       local ref = torch.mean(torch.mm(st, cv), 1)
-      table.insert(style_outputs, {toextract, cv, ref, ce})
+      local transf = delinearize_gram(sz, cv)
+      table.insert(style_outputs, {layer = style_layers[i], v = transf, ref = ref, e = ce})
    end
    
    -- Save final features
@@ -199,6 +185,51 @@ function deprocess(img)
    return img
 end
 
+-- Converts table of gram matrices into Matrix, keeping only upper-triangular matrix
+function linearize_gram(gs)
+   local sz = gs[1]:size()[1]
+   local indices = torch.Tensor((sz*(sz+1))/2)
+   local ik = 1
+   for j=1, sz do
+      for k=1, j do
+	 indices[ik] = (j-1)*sz + k
+	 ik = ik+1
+      end
+   end
+   local st = torch.Tensor(#gs, indices:nElement())
+   for j=1, #gs do
+      local o = gs[j]:storage()
+      for k=1, indices:nElement() do
+	 st[j][k] = o[indices[k]]
+      end
+   end
+   return st, sz
+end
+
+-- Undo the previous process with the eigenvector matrix
+-- from S(S-1)/2 square matrix, outputs S x S(S-1)/2 matrix (i.e. same number of eigenvectors)
+function delinearize_gram(sz, ev)
+   local gsz = sz*(sz+1)/2
+   local output = torch.Tensor(sz*sz, gsz)
+   local ik = 1
+   for j=1, sz do
+      for k=1, j-1 do
+	 local i1 = (j-1)*sz + k
+	 local i2 = (k-1)*sz + j
+	 for l=1, gsz do
+	    output[i1][l] = ev[ik][l]/2
+	    output[i2][l] = ev[ik][l]/2
+	 end
+	 ik = ik+1
+      end
+      local i = (j-1)*sz + j
+      for l=1, gsz do
+	 output[i][l] = ev[ik][l]
+      end
+      ik = ik+1
+   end
+   return output
+end
 
 -- from package unsup by koraykv
 -- PCA using covariance matrix
