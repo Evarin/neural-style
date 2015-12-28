@@ -61,11 +61,13 @@ local function main(params)
     cudnn.SpatialConvolution.accGradParameters = nn.SpatialConvolutionMM.accGradParameters -- ie: nop
   end
   
+  print('loadcaffe')
   local cnn = loadcaffe_wrap.load(params.proto_file, params.model_file, params.backend):float()
   if params.gpu >= 0 then
     cnn:cuda()
   end
   
+  print('load content')
   local content_image = image.load(params.content_image, 3)
   content_image = image.scale(content_image, params.image_size, 'bilinear')
   local content_image_caffe = preprocess(content_image):float()
@@ -80,6 +82,7 @@ local function main(params)
   local content_layers = params.content_layers:split(",")
 
   -- Load style references
+  print('load style')
   local pstyle_layers = params.style_layers:split(",")
   local pstyle_ref = torch.load(params.style_data)
 
@@ -88,8 +91,8 @@ local function main(params)
 
   for i=1, #pstyle_layers do
      local matching = 0
-     for j=1, #style_ref do
-	if pstyle_ref[j].layer == pstyle_layer[i] then
+     for j=1, #pstyle_ref do
+	if pstyle_ref[j].layer == pstyle_layers[i] then
 	   matching = j
 	   break
 	end
@@ -106,6 +109,7 @@ local function main(params)
   pstyle_ref = nil
   collectgarbage()
 
+  print('setting up network')
   -- Set up the network, inserting style and content loss modules
   local content_losses, style_losses = {}, {}
   local next_content_idx, next_style_idx = 1, 1
@@ -150,7 +154,7 @@ local function main(params)
       if name == style_layers[next_style_idx] then
         print("Setting up style layer  ", i, ":", layer.name)
         local target = style_ref[next_style_idx]
-	local transform, reference = preprocessStyle(target.v, taret.e, target.ref)
+	local transform, reference = preprocessStyle(target.v, target.e, target.ref)
         local norm = params.normalize_gradients
         local loss_module = nn.StyleLoss(params.style_weight, transform, reference, norm):float()
         if params.gpu >= 0 then
@@ -346,9 +350,9 @@ end
 
 -- process the Style Data
 function preprocessStyle(v, e, ref)
-   local ev = torch.pow(e + 1.0f, -1)
-   local transf = torch.MM(v, torch.diag(ev))
-   local tref = torch.MM(transf, ref)
+   local ev = torch.diag(torch.pow(e + 1.0, -1))
+   local transf = v * ev
+   local tref = ref * ev
    return transf, tref
 end
 
@@ -374,7 +378,7 @@ function StyleLoss:__init(strength, transform, reference, normalize)
   self.normalize = normalize or false
   self.strength = strength
   self.transform = transform
-  self.target = reference
+  self.target = reference:t()
   self.loss = 0
   
   self.gram = GramMatrix()
@@ -386,7 +390,7 @@ end
 function StyleLoss:updateOutput(input)
   self.G = self.gram:forward(input)
   self.G:div(input:nElement())
-  self.style = torch.MM(self.transform, self.G)
+  self.style = torch.mm(self.transform:t(), torch.reshape(self.G, self.G:nElement(), 1))
   self.loss = self.crit:forward(self.style, self.target)
   self.loss = self.loss * self.strength
   self.output = input
@@ -396,8 +400,8 @@ end
 function StyleLoss:updateGradInput(input, gradOutput)
   local dS = self.crit:backward(self.style, self.target)
   dS:div(input:nElement())
-  local dG = torch.MM(self.transform:t(), dS)
-  self.gradInput = self.gram:backward(input, dG)
+  local dG = torch.mm(self.transform, dS)
+  self.gradInput = self.gram:backward(input, dG:reshape(dG, self.G:size()))
   if self.normalize then
     self.gradInput:div(torch.norm(self.gradInput, 1) + 1e-8)
   end
