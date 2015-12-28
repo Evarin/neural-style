@@ -1,6 +1,7 @@
 *.swp
 out*.png
 *.png
+*.data
 models/
 !models/download_models.sh
 examples/

@@ -64,7 +64,6 @@ local function main(params)
    end
    
    
-   local content_layers = params.content_layers:split(",")
    local style_layers = params.style_layers:split(",")
 
    -- Set up the network, inserting style descriptor modules
@@ -118,43 +117,55 @@ local function main(params)
    for i=1, #style_descrs do
       table.insert(outputs, {})
    end
-
-   net = nil
-   collectgarbage()
    
    -- Run each image to the network and save their style features
    for i=1, #style_images do
-      print('processing image '..i..': '..style_image[i])
-      local img = image.load(style_image[i], 3)
+      print('processing image '..i..': '..style_images[i])
+      local img = image.load(style_images[i], 3)
       if img then
 	 img = image.scale(img, style_size, 'bilinear')
 	 local img_caffe = preprocess(img):float()
 	 if params.gpu >= 0 then
-	    img = img:cuda()
+	    img_caffe = img_caffe:cuda()
 	 end
-	 net:forward(img)
+	 net:forward(img_caffe)
 	 for j, mod in ipairs(style_descrs) do
 	    table.insert(outputs[j], mod.G:clone())
 	 end
       end
    end
    
+
+   net = nil
+   collectgarbage()
+
    -- Unsupervised learning of the features
    local style_outputs = {}
    for i=1, #style_descrs do
-      local st = torch.Tensor(#outputs[i], outputs[i][1]:nElement())
-      for j=1, #outputs[i] do
-	 for k=1, #outputs[i][j] do
-	    st[j][k] = #outputs[i][j][k]
+      local sz = outputs[i][1]:size()[1]
+      local toextract = torch.Tensor((sz*(sz+1))/2)
+      local ik = 1
+      for j=1, sz do
+	 for k=1, j do
+	    toextract[ik] = (j-1)*sz + k
+	    ik = ik+1
 	 end
       end
+      local st = torch.Tensor(#outputs[i], toextract:nElement())
+      for j=1, #outputs[i] do
+	 local o = outputs[i][j]:storage()
+	 for k=1, toextract:nElement() do
+	    st[j][k] = o[toextract[k]]
+	 end
+      end
+      print('PCA '..i..': layer '..style_layers[i])
       local ce, cv = pcacov(st)
       local ref = torch.mean(torch.mm(st, cv), 1)
-      table.insert(style_outputs, {cv, ref, ce})
+      table.insert(style_outputs, {toextract, cv, ref, ce})
    end
    
    -- Save final features
-   torch.save(style_outputs, params.output_file)
+   torch.save(params.output_file, style_outputs)
 end
 
 
