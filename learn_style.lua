@@ -13,6 +13,7 @@ local cmd = torch.CmdLine()
 -- Basic options
 cmd:option('-style_dir', 'examples/vangogh/',
            'Style target images')
+cmd:option('-style_max_number', 100000)
 cmd:option('-image_size', 256, 'Maximum height / width of generated image')
 cmd:option('-gpu', 0, 'Zero-indexed ID of the GPU to use; for CPU mode set -gpu = -1')
 
@@ -75,7 +76,9 @@ local function main(params)
    local style_images = {}
    for file in io.popen('find "'..params.style_dir..'" -maxdepth 1 -type f'):lines() do
       print("found file "..file)
-      table.insert(style_images, file)
+      if #style_images < params.style_max_number then
+         table.insert(style_images, file)
+      end
    end
    
    local style_layers = params.style_layers:split(",")
@@ -225,7 +228,7 @@ function stack_gram(gs)
    for j=1, #gs do
       local o = gs[j]:reshape(gs[j], sz, 1)
       for k=1, sz do
-	 st[j][k] = o[k]
+	 st[j][k] = o[k][1]
       end
    end
    return st

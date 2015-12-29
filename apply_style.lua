@@ -439,7 +439,7 @@ end
 function StyleLoss:updateGradInput(input, gradOutput)
    local dS = self.crit:backward(self.style, self.target)
    dS:div(input:nElement())
-   local dG = torch.cdiv(dS, self.transform)
+   local dG = torch.cmul(dS, self.transform)
    self.gradInput = self.gram:backward(input, dG:reshape(dG, self.G:size()))
    if self.normalize then
       self.gradInput:div(torch.norm(self.gradInput, 1) + 1e-8)
