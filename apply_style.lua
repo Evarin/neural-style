@@ -183,7 +183,7 @@ local function main(params)
 	 if name == style_layers[next_style_idx] then
 	    print("Setting up style layer  ", i, ":", layer.name)
 	    local target = style_ref[next_style_idx]
-	    local transform, reference = preprocessStyle(target.v, target.e, target.ref)
+	    local transform, reference = preprocessStyle(target.mean, target.var)
 	    local norm = params.normalize_gradients
 	    local loss_module = nn.StyleLoss(params.style_weight, transform, reference, norm):float()
 	    if params.gpu >= 0 then
@@ -386,11 +386,13 @@ end
 
 
 -- process the Style Data
-function preprocessStyle(v, e, ref)
-   local ev = torch.diag(torch.pow(e + 1.0, -1))
-   local transf = v * ev
-   local tref = ref * ev
-   return transf, tref
+function preprocessStyle(mean, variance)
+   local ev = torch.pow(variance + 1.0, -1)
+   local tref = torch.cmul(mean, ev)
+   local sz = math.sqrt(mean:nElement())
+   tref:reshape(sz, sz)
+   print(tref:size())
+   return ev, tref
 end
 
 -- Returns a network that computes the CxC Gram matrix from inputs
@@ -427,7 +429,7 @@ end
 function StyleLoss:updateOutput(input)
    self.G = self.gram:forward(input)
    self.G:div(input:nElement())
-   self.style = torch.mm(self.transform:t(), torch.reshape(self.G, self.G:nElement(), 1))
+   self.style = torch.cmul(self.G, self.transform:t())
    self.loss = self.crit:forward(self.style, self.target)
    self.loss = self.loss * self.strength
    self.output = input
@@ -437,7 +439,7 @@ end
 function StyleLoss:updateGradInput(input, gradOutput)
    local dS = self.crit:backward(self.style, self.target)
    dS:div(input:nElement())
-   local dG = torch.mm(self.transform, dS)
+   local dG = torch.cdiv(dS, self.transform)
    self.gradInput = self.gram:backward(input, dG:reshape(dG, self.G:size()))
    if self.normalize then
       self.gradInput:div(torch.norm(self.gradInput, 1) + 1e-8)
