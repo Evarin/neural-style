@@ -170,12 +170,17 @@ local function main(params)
    -- Unsupervised learning of the features
    local style_outputs = {}
    for i=1, #style_descrs do
-      local st, sz = linearize_gram(outputs[i])
-      print('PCA '..i..': layer '..style_layers[i])
-      local ce, cv = pcacov(st, params.gpu, params.backend)
-      local ref = torch.mean(torch.mm(st, cv), 1)
-      local transf = delinearize_gram(sz, cv)
-      table.insert(style_outputs, {layer = style_layers[i], v = transf, ref = ref, e = ce})
+      local st = stack_gram(outputs[i])
+      if params.gpu >= 0 then	    
+	 if params.backend ~= 'clnn' then
+	    st = st:cuda()
+	 else
+	    st = st:cl()
+	 end
+      end
+      print('Variance '..i..': layer '..style_layers[i])
+      local mean, var = variance(st, params.gpu, params.backend)
+      table.insert(style_outputs, {layer = style_layers[i], mean = mean, var = var})
    end
    
    -- Save final features
@@ -211,6 +216,19 @@ function deprocess(img)
    local perm = torch.LongTensor{3, 2, 1}
    img = img:index(1, perm):div(256.0)
    return img
+end
+
+-- Converts table of gram matrices into Matrix
+function stack_gram(gs)
+   local sz = gs[1]:nElement()
+   local st = torch.Tensor(#gs, sz)
+   for j=1, #gs do
+      local o = gs[j]:reshape(gs[j], sz, 1)
+      for k=1, sz do
+	 st[j][k] = o[k]
+      end
+   end
+   return st
 end
 
 -- Converts table of gram matrices into Matrix, keeping only upper-triangular matrix
@@ -278,6 +296,15 @@ function pcacov(x, gpu, backend)
    end
    local ce,cv = torch.symeig(c,'V')
    return ce,cv
+end
+
+-- variance
+-- x is supposed to be MxN matrix, where M samples(trials) and each sample(trial) is N dim
+-- returns the eigen values and vectors of the covariance matrix in increasing order
+function variance(x, gpu, backend)
+   local mean = torch.mean(x, 1)
+   local var = torch.mean(torch.pow(x, 2), 1) - torch.pow(mean, 2)
+   return mean, var
 end
 
 
