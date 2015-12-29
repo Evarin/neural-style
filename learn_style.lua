@@ -224,12 +224,9 @@ end
 -- Converts table of gram matrices into Matrix
 function stack_gram(gs)
    local sz = gs[1]:nElement()
-   local st = torch.Tensor(#gs, sz)
-   for j=1, #gs do
-      local o = gs[j]:reshape(gs[j], sz, 1)
-      for k=1, sz do
-	 st[j][k] = o[k][1]
-      end
+   local st = gs[1]:reshape(gs[1], 1, sz)
+   for j=2, #gs do
+      st = st:cat(torch.reshape(gs[j], 1, sz))
    end
    return st
 end
