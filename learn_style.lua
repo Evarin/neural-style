@@ -3,8 +3,8 @@ require 'nn'
 require 'image'
 require 'optim'
 require 'lfs'
-
-local loadcaffe_wrap = require 'loadcaffe_wrapper'
+require 'io'
+require 'loadcaffe'
 
 --------------------------------------------------------------------------------
 
@@ -24,7 +24,7 @@ cmd:option('-style_scale', 1.0)
 cmd:option('-pooling', 'max', 'max|avg')
 cmd:option('-proto_file', 'models/VGG_ILSVRC_19_layers_deploy.prototxt')
 cmd:option('-model_file', 'models/VGG_ILSVRC_19_layers.caffemodel')
-cmd:option('-backend', 'nn', 'nn|cudnn')
+cmd:option('-backend', 'nn', 'nn|cudnn|clnn')
 cmd:option('-seed', -1)
 
 cmd:option('-style_layers', 'relu1_1,relu2_1,relu3_1,relu4_1,relu5_1', 'layers for style')
@@ -35,24 +35,39 @@ end
 
 local function main(params)
    if params.gpu >= 0 then
+    if params.backend ~= 'clnn' then
       require 'cutorch'
       require 'cunn'
       cutorch.setDevice(params.gpu + 1)
-   else
-      params.backend = 'nn-cpu'
-   end
+    else
+      require 'clnn'
+      require 'cltorch'
+      cltorch.setDevice(params.gpu + 1)
+    end
+  else
+    params.backend = 'nn'
+  end
 
-   if params.backend == 'cudnn' then
-      require 'cudnn'
-      cudnn.SpatialConvolution.accGradParameters = nn.SpatialConvolutionMM.accGradParameters -- ie: nop
-   end
+  if params.backend == 'cudnn' then
+    require 'cudnn'
+    if params.cudnn_autotune then
+      cudnn.benchmark = true
+    end
+    cudnn.SpatialConvolution.accGradParameters = nn.SpatialConvolutionMM.accGradParameters -- ie: nop
+  end
    
-   print('loadcaffe')
-   local cnn = loadcaffe_wrap.load(params.proto_file, params.model_file, params.backend):float()
-   print('loadcuda')
-   if params.gpu >= 0 then
+  print('loadcaffe')
+  local loadcaffe_backend = params.backend
+  if params.backend == 'clnn' then loadcaffe_backend = 'nn' end
+  local cnn = loadcaffe.load(params.proto_file, params.model_file, loadcaffe_backend):float()
+  if params.gpu >= 0 then
+    if params.backend ~= 'clnn' then
       cnn:cuda()
-   end
+    else
+      cnn:cl()
+    end
+  end
+   
    
    -- Lists all the files from the style directory
    print('get images')
@@ -62,7 +77,6 @@ local function main(params)
       print("found file "..file)
       table.insert(style_images, file)
    end
-   
    
    local style_layers = params.style_layers:split(",")
 
@@ -81,7 +95,13 @@ local function main(params)
 	    local kW, kH = layer.kW, layer.kH
 	    local dW, dH = layer.dW, layer.dH
 	    local avg_pool_layer = nn.SpatialAveragePooling(kW, kH, dW, dH):float()
-	    if params.gpu >= 0 then avg_pool_layer:cuda() end
+	    if params.gpu >= 0 then
+	       if params.backend ~= 'clnn' then
+		  avg_pool_layer:cuda()
+	       else
+		  avg_pool_layer:cl()
+	       end
+	    end
 	    local msg = 'Replacing max pooling at layer %d with average pooling'
 	    print(string.format(msg, i))
 	    net:add(avg_pool_layer)
@@ -92,7 +112,11 @@ local function main(params)
 	    print("Setting up style layer  ", i, ":", layer.name)
 	    local style_module = nn.StyleDescr(params.style_weight):float()
 	    if params.gpu >= 0 then
-	       style_module:cuda()
+	       if params.backend ~= 'clnn' then
+		  style_module:cuda()
+	       else
+		  style_module:cl()
+	       end
 	    end
 	    net:add(style_module)
 	    table.insert(style_descrs, style_module)
@@ -125,8 +149,12 @@ local function main(params)
       if img then
 	 img = image.scale(img, style_size, 'bilinear')
 	 local img_caffe = preprocess(img):float()
-	 if params.gpu >= 0 then
-	    img_caffe = img_caffe:cuda()
+	 if params.gpu >= 0 then	    
+	    if params.backend ~= 'clnn' then
+	       img_caffe = img_caffe:cuda()
+	    else
+	       img_caffe = img_caffe:cl()
+	    end
 	 end
 	 net:forward(img_caffe)
 	 for j, mod in ipairs(style_descrs) do
@@ -144,7 +172,7 @@ local function main(params)
    for i=1, #style_descrs do
       local st, sz = linearize_gram(outputs[i])
       print('PCA '..i..': layer '..style_layers[i])
-      local ce, cv = pcacov(st)
+      local ce, cv = pcacov(st, params.gpu, params.backend)
       local ref = torch.mean(torch.mm(st, cv), 1)
       local transf = delinearize_gram(sz, cv)
       table.insert(style_outputs, {layer = style_layers[i], v = transf, ref = ref, e = ce})
@@ -235,11 +263,19 @@ end
 -- PCA using covariance matrix
 -- x is supposed to be MxN matrix, where M samples(trials) and each sample(trial) is N dim
 -- returns the eigen values and vectors of the covariance matrix in increasing order
-function pcacov(x)
+function pcacov(x, gpu, backend)
    local mean = torch.mean(x,1)
    local xm = x - torch.ger(torch.ones(x:size(1)),mean:squeeze())
    local c = torch.mm(xm:t(),xm)
    c:div(x:size(1)-1)
+   if gpu >=0 then
+      if backend ~= 'clnn' then
+	 c = c:cuda()
+      else
+	 -- not implemented in cltorch
+	 c = c
+      end
+   end
    local ce,cv = torch.symeig(c,'V')
    return ce,cv
 end
