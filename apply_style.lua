@@ -391,7 +391,6 @@ function preprocessStyle(mean, variance)
    local tref = torch.cmul(mean, ev)
    local sz = math.sqrt(mean:nElement())
    tref:reshape(sz, sz)
-   print(tref:size())
    return ev, tref
 end
 
@@ -423,7 +422,7 @@ function StyleLoss:__init(strength, transform, reference, normalize)
    self.gram = GramMatrix()
    self.G = nil
    self.style = nil
-   self.crit = nn.MSECriterion()
+   self.crit = nn.AbsCriterion()
 end
 
 function StyleLoss:updateOutput(input)

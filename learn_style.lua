@@ -226,7 +226,7 @@ function stack_gram(gs)
    local sz = gs[1]:nElement()
    local st = gs[1]:reshape(gs[1], 1, sz)
    for j=2, #gs do
-      st = st:cat(torch.reshape(gs[j], 1, sz))
+      st = st:cat(torch.reshape(gs[j], 1, sz), 1)
    end
    return st
 end
