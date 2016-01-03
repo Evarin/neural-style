@@ -23,7 +23,7 @@ cmd:option('-content_weight', 5e0)
 cmd:option('-style_weight', 1e2)
 cmd:option('-tv_weight', 1e-3)
 cmd:option('-num_iterations', 1000)
-cmd:option('-normalize_gradients', false)
+cmd:option('-normalize_features', false)
 cmd:option('-init', 'random', 'random|image')
 cmd:option('-optimizer', 'lbfgs', 'lbfgs|adam')
 cmd:option('-learning_rate', 1e1)
@@ -177,8 +177,8 @@ local function main(params)
       if name == content_layers[next_content_idx] then
         print("Setting up content layer", i, ":", layer.name)
         local target = net:forward(content_image_caffe):clone()
-        local norm = params.normalize_gradients
-        local loss_module = nn.ContentLoss(params.content_weight, target, norm):float()
+        local norm = params.normalize_features
+        local loss_module = nn.ContentLoss(params.content_weight, target, false):float()
         if params.gpu >= 0 then
           if params.backend ~= 'clnn' then
             loss_module:cuda()
@@ -192,7 +192,8 @@ local function main(params)
       end
       if name == style_layers[next_style_idx] then
         print("Setting up style layer  ", i, ":", layer.name)
-        local gram = GramMatrix():float()
+        local norm = params.normalize_features
+        local gram = GramMatrix(norm):float()
         if params.gpu >= 0 then
           if params.backend ~= 'clnn' then
             gram = gram:cuda()
@@ -204,7 +205,9 @@ local function main(params)
         for i = 1, #style_images_caffe do
           local target_features = net:forward(style_images_caffe[i]):clone()
           local target_i = gram:forward(target_features):clone()
-          target_i:div(target_features:nElement())
+          if not norm then
+            target_i:div(target_features:nElement())
+          end
           target_i:mul(style_blend_weights[i])
           if i == 1 then
             target = target_i
@@ -212,7 +215,6 @@ local function main(params)
             target:add(target_i)
           end
         end
-        local norm = params.normalize_gradients
         local loss_module = nn.StyleLoss(params.style_weight, target, norm):float()
         if params.gpu >= 0 then
           if params.backend ~= 'clnn' then
@@ -414,9 +416,12 @@ end
 
 -- Returns a network that computes the CxC Gram matrix from inputs
 -- of size C x H x W
-function GramMatrix()
+function GramMatrix(normalize)
   local net = nn.Sequential()
   net:add(nn.View(-1):setNumInputDims(2))
+  if normalize then
+    net:add(nn.Normalize(2))
+  end
   local concat = nn.ConcatTable()
   concat:add(nn.Identity())
   concat:add(nn.Identity())
@@ -436,14 +441,16 @@ function StyleLoss:__init(strength, target, normalize)
   self.target = target
   self.loss = 0
   
-  self.gram = GramMatrix()
+  self.gram = GramMatrix(normalize)
   self.G = nil
   self.crit = nn.MSECriterion()
 end
 
 function StyleLoss:updateOutput(input)
   self.G = self.gram:forward(input)
-  self.G:div(input:nElement())
+  if not self.normalize then
+    self.G:div(input:nElement())
+  end
   self.loss = self.crit:forward(self.G, self.target)
   self.loss = self.loss * self.strength
   self.output = input
@@ -452,11 +459,13 @@ end
 
 function StyleLoss:updateGradInput(input, gradOutput)
   local dG = self.crit:backward(self.G, self.target)
-  dG:div(input:nElement())
-  self.gradInput = self.gram:backward(input, dG)
-  if self.normalize then
-    self.gradInput:div(torch.norm(self.gradInput, 1) + 1e-8)
+  if not self.normalize then
+    dG:div(input:nElement())
   end
+  self.gradInput = self.gram:backward(input, dG)
+  -- if self.normalize then
+  --  self.gradInput:div(torch.norm(self.gradInput, 1) + 1e-8)
+  -- end
   self.gradInput:mul(self.strength)
   self.gradInput:add(gradOutput)
   return self.gradInput
