@@ -33,6 +33,7 @@ cmd:option('-output_image', 'out.png')
 
 -- Other options
 cmd:option('-style_scale', 1.0)
+-- cmd:option('-normalize_features', false) -- set by style data
 cmd:option('-pooling', 'max', 'max|avg')
 cmd:option('-proto_file', 'models/VGG_ILSVRC_19_layers_deploy.prototxt')
 cmd:option('-model_file', 'models/VGG_ILSVRC_19_layers.caffemodel')
@@ -167,8 +168,8 @@ local function main(params)
 	 if name == content_layers[next_content_idx] then
 	    print("Setting up content layer", i, ":", layer.name)
 	    local target = net:forward(content_image_caffe):clone()
-	    local norm = params.normalize_gradients
-	    local loss_module = nn.ContentLoss(params.content_weight, target, norm):float()
+	    local norm = params.normalize_features
+	    local loss_module = nn.ContentLoss(params.content_weight, target, false):float()
 	    if params.gpu >= 0 then
 	       if params.backend ~= 'clnn' then
 		  loss_module:cuda()
@@ -181,10 +182,10 @@ local function main(params)
 	    next_content_idx = next_content_idx + 1
 	 end
 	 if name == style_layers[next_style_idx] then
-	    print("Setting up style layer  ", i, ":", layer.name)
 	    local target = style_ref[next_style_idx]
+	    local norm = target.normalize or false
+	    print("Setting up style layer  ", i, ":", layer.name, ' normalizing:', norm)
 	    local transform, reference = preprocessStyle(target.mean, target.var)
-	    local norm = params.normalize_gradients
 	    local loss_module = nn.StyleLoss(params.style_weight, transform, reference, norm):float()
 	    if params.gpu >= 0 then
 	       if params.backend ~= 'clnn' then
@@ -396,15 +397,18 @@ end
 
 -- Returns a network that computes the CxC Gram matrix from inputs
 -- of size C x H x W
-function GramMatrix()
-   local net = nn.Sequential()
-   net:add(nn.View(-1):setNumInputDims(2))
-   local concat = nn.ConcatTable()
-   concat:add(nn.Identity())
-   concat:add(nn.Identity())
-   net:add(concat)
-   net:add(nn.MM(false, true))
-   return net
+function GramMatrix(normalize)
+  local net = nn.Sequential()
+  net:add(nn.View(-1):setNumInputDims(2))
+  if normalize then
+    net:add(nn.Normalize(2))
+  end
+  local concat = nn.ConcatTable()
+  concat:add(nn.Identity())
+  concat:add(nn.Identity())
+  net:add(concat)
+  net:add(nn.MM(false, true))
+  return net
 end
 
 
@@ -419,7 +423,7 @@ function StyleLoss:__init(strength, transform, reference, normalize)
    self.target = reference:t()
    self.loss = 0
    
-   self.gram = GramMatrix()
+   self.gram = GramMatrix(normalize)
    self.G = nil
    self.style = nil
    self.crit = nn.AbsCriterion()
@@ -427,7 +431,9 @@ end
 
 function StyleLoss:updateOutput(input)
    self.G = self.gram:forward(input)
-   self.G:div(input:nElement())
+   if not self.normalize then
+     self.G:div(input:nElement())
+   end
    self.style = torch.cmul(self.G, self.transform:t())
    self.loss = self.crit:forward(self.style, self.target)
    self.loss = self.loss * self.strength
@@ -437,12 +443,14 @@ end
 
 function StyleLoss:updateGradInput(input, gradOutput)
    local dS = self.crit:backward(self.style, self.target)
-   dS:div(input:nElement())
+   if not self.normalize then
+     dS:div(input:nElement())
+   end
    local dG = torch.cmul(dS, self.transform)
    self.gradInput = self.gram:backward(input, dG:reshape(dG, self.G:size()))
-   if self.normalize then
-      self.gradInput:div(torch.norm(self.gradInput, 1) + 1e-8)
-   end
+   -- if self.normalize then
+   --   self.gradInput:div(torch.norm(self.gradInput, 1) + 1e-8)
+   -- end
    self.gradInput:mul(self.strength)
    self.gradInput:add(gradOutput)
    return self.gradInput

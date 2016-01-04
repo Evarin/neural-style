@@ -22,6 +22,7 @@ cmd:option('-output_file', 'style.data')
 
 -- Other options
 cmd:option('-style_scale', 1.0)
+cmd:option('-normalize_features', false)
 cmd:option('-pooling', 'max', 'max|avg')
 cmd:option('-proto_file', 'models/VGG_ILSVRC_19_layers_deploy.prototxt')
 cmd:option('-model_file', 'models/VGG_ILSVRC_19_layers.caffemodel')
@@ -113,7 +114,8 @@ local function main(params)
 	 end
 	 if name == style_layers[next_style_idx] then
 	    print("Setting up style layer  ", i, ":", layer.name)
-	    local style_module = nn.StyleDescr(params.style_weight):float()
+	    local norm = params.normalize_features
+	    local style_module = nn.StyleDescr(params.style_weight, norm):float()
 	    if params.gpu >= 0 then
 	       if params.backend ~= 'clnn' then
 		  style_module:cuda()
@@ -183,7 +185,7 @@ local function main(params)
       end
       print('Variance '..i..': layer '..style_layers[i])
       local mean, var = variance(st, params.gpu, params.backend)
-      table.insert(style_outputs, {layer = style_layers[i], mean = mean, var = var})
+      table.insert(style_outputs, {layer = style_layers[i], mean = mean, var = var, normalize = params.normalize_features})
    end
    
    -- Save final features
@@ -310,32 +312,38 @@ end
 
 -- Returns a network that computes the CxC Gram matrix from inputs
 -- of size C x H x W
-function GramMatrix()
-   local net = nn.Sequential()
-   net:add(nn.View(-1):setNumInputDims(2))
-   local concat = nn.ConcatTable()
-   concat:add(nn.Identity())
-   concat:add(nn.Identity())
-   net:add(concat)
-   net:add(nn.MM(false, true))
-   return net
+function GramMatrix(normalize)
+  local net = nn.Sequential()
+  net:add(nn.View(-1):setNumInputDims(2))
+  if normalize then
+    net:add(nn.Normalize(2))
+  end
+  local concat = nn.ConcatTable()
+  concat:add(nn.Identity())
+  concat:add(nn.Identity())
+  net:add(concat)
+  net:add(nn.MM(false, true))
+  return net
 end
 
 
 -- Define an nn Module to compute style description (Gram Matrix) in-place
 local StyleDescr, parent = torch.class('nn.StyleDescr', 'nn.Module')
 
-function StyleDescr:__init(strength)
+function StyleDescr:__init(strength, normalize)
    parent.__init(self)
    self.strength = strength
+   self.normalize = normalize or false
    
-   self.gram = GramMatrix()
+   self.gram = GramMatrix(self.normalize)
    self.G = nil
 end
 
 function StyleDescr:updateOutput(input)
    self.G = self.gram:forward(input)
-   self.G:div(input:nElement())
+   if not self.normalize then
+     self.G:div(input:nElement())
+   end
    self.output = input
    return self.output
 end
