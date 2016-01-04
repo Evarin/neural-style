@@ -219,7 +219,8 @@ local function main(params)
             target:add(target_i)
           end
         end
-        local loss_module = nn.StyleLoss(params.style_weight, target, norm):float()
+	local style_weight = params.style_weight / torch.trace(target_i) * target_i:size()[1]
+        local loss_module = nn.StyleLoss(style_weight, target, norm):float()
         if params.gpu >= 0 then
           if params.backend ~= 'clnn' then
             loss_module:cuda()
