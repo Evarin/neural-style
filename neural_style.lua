@@ -23,7 +23,7 @@ cmd:option('-content_weight', 5e0)
 cmd:option('-style_weight', 1e2)
 cmd:option('-tv_weight', 1e-3)
 cmd:option('-num_iterations', 1000)
-cmd:option('-normalize_features', false)
+cmd:option('-normalize_features', 'false')
 cmd:option('-init', 'random', 'random|image')
 cmd:option('-optimizer', 'lbfgs', 'lbfgs|adam')
 cmd:option('-learning_rate', 1e1)
@@ -133,6 +133,7 @@ local function main(params)
   
   local content_layers = params.content_layers:split(",")
   local style_layers = params.style_layers:split(",")
+  local normalize_features = params.normalize_features:split(",")
 
   -- Set up the network, inserting style and content loss modules
   local content_losses, style_losses = {}, {}
@@ -177,8 +178,8 @@ local function main(params)
       if name == content_layers[next_content_idx] then
         print("Setting up content layer", i, ":", layer.name)
         local target = net:forward(content_image_caffe):clone()
-        local norm = params.normalize_features
-        local loss_module = nn.ContentLoss(params.content_weight, target, false):float()
+        local norm = false
+        local loss_module = nn.ContentLoss(params.content_weight, target, norm):float()
         if params.gpu >= 0 then
           if params.backend ~= 'clnn' then
             loss_module:cuda()
@@ -191,9 +192,12 @@ local function main(params)
         next_content_idx = next_content_idx + 1
       end
       if name == style_layers[next_style_idx] then
-        print("Setting up style layer  ", i, ":", layer.name)
-        local norm = params.normalize_features
-        local gram = GramMatrix(norm):float()
+        local norm = (normalize_features[#normalize_features] == 'true')
+	if #normalize_features >= next_style_idx then
+	   norm = (normalize_features[next_style_idx] == 'true')
+	end
+        print("Setting up style layer  ", i, ":", layer.name, 'normalize:', norm)
+	local gram = GramMatrix(norm):float()
         if params.gpu >= 0 then
           if params.backend ~= 'clnn' then
             gram = gram:cuda()

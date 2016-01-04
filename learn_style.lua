@@ -83,6 +83,8 @@ local function main(params)
    end
    
    local style_layers = params.style_layers:split(",")
+   local pnormalize_features = params.normalize_features:split(",")
+   local normalize_features = {}
 
    -- Set up the network, inserting style descriptor modules
    local style_descrs = {}
@@ -113,8 +115,12 @@ local function main(params)
 	    net:add(layer)
 	 end
 	 if name == style_layers[next_style_idx] then
-	    print("Setting up style layer  ", i, ":", layer.name)
-	    local norm = params.normalize_features
+	    local norm = (pnormalize_features[#pnormalize_features] == 'true')
+	    if #pnormalize_features >= next_style_idx then
+	       norm = (pnormalize_features[next_style_idx] == 'true')
+	    end
+	    table.insert(normalize_features, norm)
+	    print("Setting up style layer  ", i, ":", layer.name, 'normalize:', norm)
 	    local style_module = nn.StyleDescr(params.style_weight, norm):float()
 	    if params.gpu >= 0 then
 	       if params.backend ~= 'clnn' then
@@ -185,7 +191,7 @@ local function main(params)
       end
       print('Variance '..i..': layer '..style_layers[i])
       local mean, var = variance(st, params.gpu, params.backend)
-      table.insert(style_outputs, {layer = style_layers[i], mean = mean, var = var, normalize = params.normalize_features})
+      table.insert(style_outputs, {layer = style_layers[i], mean = mean, var = var, normalize = normalize_features[i]})
    end
    
    -- Save final features
