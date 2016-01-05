@@ -20,10 +20,11 @@ cmd:option('-gpu', 0, 'Zero-indexed ID of the GPU to use; for CPU mode set -gpu 
 
 -- Optimization options
 cmd:option('-content_weight', 5e0)
-cmd:option('-style_weight', 1e2)
+cmd:option('-style_weight', '1e2')
 cmd:option('-tv_weight', 1e-3)
 cmd:option('-num_iterations', 1000)
 cmd:option('-normalize_features', 'false')
+cmd:option('-divide_trace', false)
 cmd:option('-init', 'random', 'random|image')
 cmd:option('-optimizer', 'lbfgs', 'lbfgs|adam')
 cmd:option('-learning_rate', 1e1)
@@ -134,6 +135,7 @@ local function main(params)
   local content_layers = params.content_layers:split(",")
   local style_layers = params.style_layers:split(",")
   local normalize_features = params.normalize_features:split(",")
+  local style_weights = params.style_weight:split(",")
 
   -- Set up the network, inserting style and content loss modules
   local content_losses, style_losses = {}, {}
@@ -219,7 +221,14 @@ local function main(params)
             target:add(target_i)
           end
         end
-	local style_weight = params.style_weight / torch.trace(target_i) * target_i:size()[1]
+        local trace = torch.trace(target:float())
+	    local style_weight = tonumber(style_weights[#style_weights])
+	    if #style_weights >= next_style_idx then
+	   style_weight = tonumber(style_weights[next_style_idx])
+	end
+	    if params.divide_trace then
+	        style_weight = style_weight / trace * target:size()[1]
+	    end
         local loss_module = nn.StyleLoss(style_weight, target, norm):float()
         if params.gpu >= 0 then
           if params.backend ~= 'clnn' then

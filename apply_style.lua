@@ -34,6 +34,7 @@ cmd:option('-output_image', 'out.png')
 -- Other options
 cmd:option('-style_scale', 1.0)
 -- cmd:option('-normalize_features', false) -- set by style data
+cmd:option('-no_covweights', false)
 cmd:option('-pooling', 'max', 'max|avg')
 cmd:option('-proto_file', 'models/VGG_ILSVRC_19_layers_deploy.prototxt')
 cmd:option('-model_file', 'models/VGG_ILSVRC_19_layers.caffemodel')
@@ -185,7 +186,11 @@ local function main(params)
 	    local target = style_ref[next_style_idx]
 	    local norm = target.normalize or false
 	    print("Setting up style layer  ", i, ":", layer.name, ' normalizing:', norm)
+	    if params.no_covweights then
+	        target.var = nil
+	    end
 	    local transform, reference = preprocessStyle(target.mean, target.var)
+	    -- print(transform)
 	    local loss_module = nn.StyleLoss(params.style_weight, transform, reference, norm):float()
 	    if params.gpu >= 0 then
 	       if params.backend ~= 'clnn' then
@@ -388,11 +393,17 @@ end
 
 -- process the Style Data
 function preprocessStyle(mean, variance)
-   local ev = torch.pow(variance + 1.0, -1)
-   local tref = torch.cmul(mean, ev)
-   local sz = math.sqrt(mean:nElement())
-   tref:reshape(sz, sz)
-   return ev, tref
+   local ev, tref = nil, nil
+   if variance then
+     ev = torch.pow(variance + 1e-5, -1)
+     -- ev = ev / torch.max(ev)
+     tref = torch.cmul(mean, ev)
+   else
+     tref = mean
+  end
+  local sz = math.sqrt(mean:nElement())
+  tref:reshape(sz, sz)
+  return ev, tref   
 end
 
 -- Returns a network that computes the CxC Gram matrix from inputs
@@ -434,19 +445,23 @@ function StyleLoss:updateOutput(input)
    if not self.normalize then
      self.G:div(input:nElement())
    end
-   self.style = torch.cmul(self.G, self.transform:t())
-   self.loss = self.crit:forward(self.style, self.target)
+   if self.transform then
+       self.G = torch.cmul(self.G, self.transform:t())
+   end
+   self.loss = self.crit:forward(self.G, self.target)
    self.loss = self.loss * self.strength
    self.output = input
    return self.output
 end
 
 function StyleLoss:updateGradInput(input, gradOutput)
-   local dS = self.crit:backward(self.style, self.target)
+   local dG = self.crit:backward(self.G, self.target)
    if not self.normalize then
-     dS:div(input:nElement())
+     dG:div(input:nElement())
    end
-   local dG = torch.cmul(dS, self.transform)
+   if self.transform then
+     dG = torch.cmul(dG, self.transform)
+   end
    self.gradInput = self.gram:backward(input, dG:reshape(dG, self.G:size()))
    -- if self.normalize then
    --   self.gradInput:div(torch.norm(self.gradInput, 1) + 1e-8)

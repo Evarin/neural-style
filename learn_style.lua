@@ -22,7 +22,7 @@ cmd:option('-output_file', 'style.data')
 
 -- Other options
 cmd:option('-style_scale', 1.0)
-cmd:option('-normalize_features', false)
+cmd:option('-normalize_features', 'false')
 cmd:option('-pooling', 'max', 'max|avg')
 cmd:option('-proto_file', 'models/VGG_ILSVRC_19_layers_deploy.prototxt')
 cmd:option('-model_file', 'models/VGG_ILSVRC_19_layers.caffemodel')
