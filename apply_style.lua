@@ -18,7 +18,7 @@ cmd:option('-gpu', 0, 'Zero-indexed ID of the GPU to use; for CPU mode set -gpu 
 
 -- Optimization options
 cmd:option('-content_weight', 5e0)
-cmd:option('-style_weight', 1e2)
+cmd:option('-style_weight', '1e2')
 cmd:option('-tv_weight', 1e-3)
 cmd:option('-num_iterations', 1000)
 cmd:option('-normalize_gradients', false)
@@ -97,6 +97,7 @@ local function main(params)
    end
    
    local content_layers = params.content_layers:split(",")
+  local style_weights = params.style_weight:split(",")
 
    -- Load style references
    print('load style')
@@ -191,7 +192,11 @@ local function main(params)
 	    end
 	    local transform, reference = preprocessStyle(target.mean, target.var)
 	    -- print(transform)
-	    local loss_module = nn.StyleLoss(params.style_weight, transform, reference, norm):float()
+	    local style_weight = tonumber(style_weights[#style_weights])
+	    if #style_weights >= next_style_idx then
+	   style_weight = tonumber(style_weights[next_style_idx])
+	end
+	    local loss_module = nn.StyleLoss(style_weight, transform, reference, norm):float()
 	    if params.gpu >= 0 then
 	       if params.backend ~= 'clnn' then
 		  loss_module:cuda()
@@ -395,7 +400,8 @@ end
 function preprocessStyle(mean, variance)
    local ev, tref = nil, nil
    if variance then
-     ev = torch.pow(variance + 1e-5, -1)
+     ev = torch.pow(variance + 1e-6, -0.5)
+     print(torch.mean(ev))
      -- ev = ev / torch.max(ev)
      tref = torch.cmul(mean, ev)
    else
@@ -437,7 +443,7 @@ function StyleLoss:__init(strength, transform, reference, normalize)
    self.gram = GramMatrix(normalize)
    self.G = nil
    self.style = nil
-   self.crit = nn.AbsCriterion()
+   self.crit = nn.MSECriterion()
 end
 
 function StyleLoss:updateOutput(input)
